@@ -1,0 +1,83 @@
+#! /bin/bash
+
+
+###chmod +x 16S_workflow.sh to make it executable
+###commandline : ./16S_workflow.sh dirfq outdir in tp_1 folder
+###!!!change soft/databases paths if executed elsewhere!!!
+
+
+dirfq=$1
+outdir=$2
+
+
+mkdir $outdir
+
+
+
+#####################################
+########## Quality check ############
+#####################################
+
+
+
+### fastqc ###
+mkdir $outdir/fastqc
+cd $dirfq
+gunzip *.gz
+ls *R1.fastq > tax_fqc.txt
+N=($(cat tax_fqc.txt | wc -l))
+for f in $(seq 1 $N);
+do sample=($(sed -n "$f p" tax_fqc.txt));
+ID=${sample%_*};
+mkdir ../$2/fastqc/$ID;
+fastqc -o $ID -f fastq $ID""_R1.fastq $ID""_R2.fastq; done
+
+#####################################
+############# Trimming ##############
+#####################################
+
+#### Trimmomatic ###
+
+trimmomatic PE -phred33 ERR2808158_R1.fastq.gz ERR2808158_R2.fastq.gz 158_R1_paired.fastq.gz 158_R1_unpaired.fastq.gz 158_R2_paired.fastq.gz 158_R2_unpaired.fastq.gz ILLUMINACLIP:SeqAdaptatrice.fa:2:30:10 LEADING:30 TRAILING:30
+trimmomatic PE -phred33 ERR2808164_R1.fastq.gz ERR2808164_R2.fastq.gz 164_R1_paired.fastq.gz 164_R1_unpaired.fastq.gz 164_R2_paired.fastq.gz 164_R2_unpaired.fastq.gz ILLUMINACLIP:SeqAdaptatrice.fa:2:30:10 LEADING/30 TRAILING:30
+
+#####################################
+############# Vsearch ###############
+#####################################
+mkdir $2/vsearch
+vsearch=soft/vsearch
+
+vsearch --fastq_mergepairs ERR2808158_R1_paired.fastq.gz --reverse ERR2808158_R2_paired.fastq.gz --fastaout merged158.fasta --label_suffix=";sample=ERR2808158"
+vsearch --fastq_mergepairs ERR2808164_R1_paired.fastq.gz --reverse ERR2808164_R2_paired.fastq.gz --fastaout merged164.fasta --label_suffix=";sample=ERR2808164"
+#####################################
+##########Rassemblage################
+#####################################
+
+
+cat $2/vsearch/*.fasta > amplicon.fasta
+#####################################
+#######Supprimer les espaces#########
+sed -i -e "s/ //g" amplicon.fasta
+
+### deduplication full length modes ###
+
+$vsearch --derep_fulllength amplicon.fasta--output amplicon_deduplicate.fasta-strand both--sizeout--minuniquesize 10
+
+### remove chimeras ###
+
+$vsearch --uchime_denovo amplicon_deduplicate.fasta--nonchimeras non_chimera.fasta
+
+### clustering ###
+
+$vsearch --cluster_size non_chimera.fasta sizein--id 0.97--centroids OTU.fasta--relabel OTU_
+
+### table d'abondance ###
+
+$vsearch-usearch_global non_chimera.fasta--db OTU.fasta--otutabout table_abond.tsv--id 0.97
+
+### annotation ###
+$vsearch --usearch_global OTU.fasta--db SILVA_132_SSURef_tax_silva.fasta.gz--top_hits_only--userfields query+target--userout OTU_annot.tsv--id 0.75
+  
+
+sed '1iOTU\tAnnotation' -i $2/vsearch/amplicon_dedfluchim_annot.fasta        ##on full length data
+
